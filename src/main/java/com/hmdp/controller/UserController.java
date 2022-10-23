@@ -1,6 +1,8 @@
 package com.hmdp.controller;
 
 
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.util.RandomUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.hmdp.dto.LoginFormDTO;
@@ -13,13 +15,22 @@ import com.hmdp.service.IUserService;
 import com.hmdp.utils.MailUtils;
 import com.hmdp.utils.RegexUtils;
 import com.hmdp.utils.UserHolder;
+import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import javax.mail.MessagingException;
 import javax.servlet.http.HttpSession;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
+
+import static com.hmdp.utils.RedisConstants.*;
 
 /**
  * <p>
@@ -40,6 +51,9 @@ public class UserController {
     @Resource
     private IUserInfoService userInfoService;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     /**
      * 发送手机验证码
      */
@@ -50,7 +64,7 @@ public class UserController {
             return Result.fail("邮箱格式不正确");
         }
         String code = MailUtils.achieveCode();
-        session.setAttribute(phone, code);
+        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
         log.info("发送登录验证码：{}", code);
 //        MailUtils.sendTestMail(phone, code);
         return Result.ok();
@@ -69,7 +83,9 @@ public class UserController {
         //获取登录验证码
         String code = loginForm.getCode();
         //获取session中的验证码
-        Object cacheCode = session.getAttribute(phone);
+        //Object cacheCode = session.getAttribute(phone);
+
+        String cacheCode = stringRedisTemplate.opsForValue().get(LOGIN_CODE_KEY + phone);
 
         //1. 校验邮箱
         if (RegexUtils.isEmailInvalid(phone)) {
@@ -78,9 +94,9 @@ public class UserController {
         }
         //3. 校验验证码
         log.info("code:{},cacheCode{}", code, cacheCode);
-        if (code == null || !cacheCode.toString().equals(code)) {
-            //4. 不一致则报错
-            return Result.fail("验证码不一致！！");
+        if (cacheCode == null || !cacheCode.equals(code)) {
+            // 不一致，报错
+            return Result.fail("验证码错误");
         }
         //5. 根据账号查询用户是否存在
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
@@ -91,10 +107,25 @@ public class UserController {
             user = createUserWithPhone(phone);
         }
         //7. 保存用户信息到session中
-        UserDTO userDTO = new UserDTO();
-        BeanUtils.copyProperties(user, userDTO);
+        //7. 保存用户信息到Redis中
+        //7.1 随机生成token，作为登录令牌
+        String token = UUID.randomUUID().toString();
+        //7.2 将UserDto对象转为HashMap存储
+        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+        HashMap<String, String > userMap = new HashMap<>();
+        userMap.put("icon", userDTO.getIcon());
+        userMap.put("id", String.valueOf(userDTO.getId()));
+        userMap.put("nickName", userDTO.getNickName());
+//        Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
+//                CopyOptions.create()
+//                        .setIgnoreNullValue(true)
+//                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
+        String tokenKey = LOGIN_USER_KEY + token;
+        stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
+        stringRedisTemplate.expire(tokenKey, 30, TimeUnit.MINUTES);
+        stringRedisTemplate.delete(LOGIN_CODE_KEY + phone);
         session.setAttribute("user", userDTO);
-        return Result.ok();
+        return Result.ok(token);
     }
 
     private User createUserWithPhone(String phone) {
