@@ -1,4 +1,5 @@
 package com.hmdp.utils;
+
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
@@ -9,7 +10,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -32,7 +32,7 @@ public class CacheClient {
         stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value), time, timeUnit);
     }
 
-    public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit timeUnit) {
+    public void setWithLogicExpire(String key, Object value, Long time, TimeUnit timeUnit) {
         RedisData<Object> redisData = new RedisData<>();
         redisData.setData(value);
         redisData.setExpireTime(LocalDateTime.now().plusSeconds(timeUnit.toSeconds(time)));
@@ -65,49 +65,43 @@ public class CacheClient {
         return r;
     }
 
-    public <R, ID> R queryWithLogicalExpire(
-            String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
+    public <R, ID> R queryWithLogicalExpire(String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit timeUnit) {
+        //1. 从redis中查询商铺缓存
         String key = keyPrefix + id;
-        // 1.从redis查询商铺缓存
         String json = stringRedisTemplate.opsForValue().get(key);
-        // 2.判断是否存在
+        //2. 如果未命中，则返回空
         if (StrUtil.isBlank(json)) {
-            // 3.存在，直接返回
             return null;
         }
-        // 4.命中，需要先把json反序列化为对象
+        //3. 命中，将json反序列化为对象
         RedisData redisData = JSONUtil.toBean(json, RedisData.class);
         R r = JSONUtil.toBean((JSONObject) redisData.getData(), type);
         LocalDateTime expireTime = redisData.getExpireTime();
-        // 5.判断是否过期
-        if(expireTime.isAfter(LocalDateTime.now())) {
-            // 5.1.未过期，直接返回店铺信息
-            log.info("未过期，直接返回数据，当前时间：{}，数据过期时间：{}",LocalDateTime.now(),expireTime);
+        //4. 判断是否过期
+        if (expireTime.isAfter(LocalDateTime.now())) {
+            //5. 过期，直接返回商铺信息
             return r;
         }
-        // 5.2.已过期，需要缓存重建
-        // 6.缓存重建
-        // 6.1.获取互斥锁
+        //6. 过期，尝试获取互斥锁
         String lockKey = LOCK_SHOP_KEY + id;
-        boolean isLock = tryLock(lockKey);
-        // 6.2.判断是否获取锁成功
-        if (isLock){
-            // 6.3.成功，开启独立线程，实现缓存重建
+        boolean flag = tryLock(lockKey);
+        //7. 获取到了锁
+        if (flag) {
+            //8. 开启独立线程
             CACHE_REBUILD_EXECUTOR.submit(() -> {
                 try {
-                    // 查询数据库
-                    R newR = dbFallback.apply(id);
-                    // 重建缓存
-                    this.setWithLogicalExpire(key, newR, time, unit);
+                    R tmp = dbFallback.apply(id);
+                    this.setWithLogicExpire(key, tmp, time, timeUnit);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
-                }finally {
-                    // 释放锁
+                } finally {
                     unlock(lockKey);
                 }
             });
+            //9. 直接返回商铺信息
+            return r;
         }
-        // 6.4.返回过期的商铺信息
+        //10. 未获取到锁，直接返回商铺信息
         return r;
     }
 
