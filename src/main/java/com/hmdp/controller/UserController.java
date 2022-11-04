@@ -112,7 +112,7 @@ public class UserController {
         String token = UUID.randomUUID().toString();
         //7.2 将UserDto对象转为HashMap存储
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
-        HashMap<String, String > userMap = new HashMap<>();
+        HashMap<String, String> userMap = new HashMap<>();
         userMap.put("icon", userDTO.getIcon());
         userMap.put("id", String.valueOf(userDTO.getId()));
         userMap.put("nickName", userDTO.getNickName());
@@ -170,5 +170,18 @@ public class UserController {
         info.setUpdateTime(null);
         // 返回
         return Result.ok(info);
+    }
+
+    @GetMapping("/{id}")
+    public Result queryById(@PathVariable("id") Long userId) {
+        // 查询详情
+        User user = userService.getById(userId);
+        if (user == null) {
+            // 没有详情，应该是第一次查看详情
+            return Result.ok();
+        }
+        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+        // 返回
+        return Result.ok(userDTO);
     }
 }
