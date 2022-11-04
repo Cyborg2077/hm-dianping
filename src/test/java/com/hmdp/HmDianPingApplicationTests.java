@@ -1,5 +1,6 @@
 package com.hmdp;
 
+import com.hmdp.entity.Shop;
 import com.hmdp.service.impl.ShopServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import lombok.extern.slf4j.Slf4j;
@@ -9,12 +10,21 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.geo.Point;
+import org.springframework.data.redis.connection.RedisGeoCommands;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import javax.annotation.Resource;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
+import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
 
 @SpringBootTest
 @Slf4j
@@ -26,6 +36,8 @@ class HmDianPingApplicationTests {
     private final ExecutorService es = Executors.newFixedThreadPool(500);
     @Resource
     private RedissonClient redissonClient;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
 
     private RLock lock;
 
@@ -102,5 +114,21 @@ class HmDianPingApplicationTests {
     @Test
     public void test() {
         shopService.saveShop2Redis(2L, 2L);
+    }
+
+    @Test
+    public void loadShopData() {
+        List<Shop> shopList = shopService.list();
+        Map<Long, List<Shop>> map = shopList.stream().collect(Collectors.groupingBy(Shop::getTypeId));
+        for (Map.Entry<Long, List<Shop>> entry : map.entrySet()) {
+            Long typeId = entry.getKey();
+            List<Shop> shops = entry.getValue();
+            String key = SHOP_GEO_KEY + typeId;
+            List<RedisGeoCommands.GeoLocation<String>> locations = new ArrayList<>(shops.size());
+            for (Shop shop : shops) {
+                locations.add(new RedisGeoCommands.GeoLocation<>(shop.getId().toString(), new Point(shop.getX(), shop.getY())));
+            }
+            stringRedisTemplate.opsForGeo().add(key, locations);
+        }
     }
 }
